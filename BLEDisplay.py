@@ -26,8 +26,9 @@ import asyncio
 from bleak import BleakScanner
 from bleak import BleakClient
 
-address = "75:6F:61:48:18:5F"
-#address = "8E:7C:C3:04:A4:20"
+address0 = "75:6F:61:48:18:5F"
+address1 = "8E:7C:C3:04:A4:20"
+address2 = "F6:5E:11:F7:A2:AD"
 
 ENV_SENSE_UUID = "19B10001-E8F4-537E-4F6C-D104768A1214"
 #ENV_SENSE_UUID = "2BD0"
@@ -69,8 +70,8 @@ class Application(tk.Frame):
         self.dataEntry["textvariable"] = self.dataValue
         self.dataValue.set("**")
      
-    async def findBLE(self):
-        async with BleakClient(address) as client:
+    async def findBLE(self, devAddress):
+        async with BleakClient(devAddress) as client:
             logger.info(f"Connected: {client.is_connected}")    
             startTime = time.time()
             while(self.trendOn):
@@ -79,7 +80,7 @@ class Application(tk.Frame):
                 self.dataArray[self.iteration] = int.from_bytes(model_number, byteorder='little', signed=True)
                 self.dataValue.set(self.dataArray[self.iteration])
                 self.iteration = self.iteration +1
-                if self.timeArray[self.iteration-1] > 60:
+                if self.timeArray[self.iteration-1] > 120:
                     self.trendOn = False
                     self.ser.write(b'\x30')
                     await client.disconnect()
@@ -89,7 +90,7 @@ class Application(tk.Frame):
            self.trendOn = False
            self.ser.write(b'\x30')
         else:
-            self.ser.write(b'\x31')
+            
             self.trendOn = True
             trendThread = threading.Thread(target=self.trend_thread, args=())
             self.threads.append(trendThread)
@@ -99,11 +100,26 @@ class Application(tk.Frame):
     def trend_thread(self):
         while(True):
             try:
-                asyncio.run(self.findBLE())
+                self.ser.write(b'\x31')
+                asyncio.run(self.findBLE(address0))
             except:
-                print("done1")
-            self.trend_save()            
-            time.sleep(240)
+                logger.info("Device 1 Complete")
+            self.trend_save()
+            
+            try:
+                self.ser.write(b'\x32')
+                asyncio.run(self.findBLE(address1))
+            except:
+                logger.info("Device 2 Complete")
+            self.trend_save()
+            try:
+                self.ser.write(b'\x33')
+                asyncio.run(self.findBLE(address2))
+            except:
+                logger.info("Device 2 Complete")
+            self.trend_save()
+            time.sleep(120)
+            #time.sleep(180)
 
     def trend_save(self):
         
@@ -116,7 +132,6 @@ class Application(tk.Frame):
                 writer.writerow(dArray)
             f.close()
         self.trendOn = True
-        self.ser.write(b'\x31')
 
 logging.basicConfig(level=logging.INFO)
 root = tk.Tk()

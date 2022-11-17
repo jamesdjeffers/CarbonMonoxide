@@ -45,8 +45,14 @@ int timerStart = 0;
 #define CAL_VOLT_MAX    931
 #define SAMPLE_DELAY    10
 #define SAMPLE_SIZE     25
+#define BKG_SIZE        5
+
 float coAnalogValue = 0;
 float coTrend [5] = {0,0,0,0,0};
+float bkgAverage = 0;
+float bkgTrend [BKG_SIZE] = {0,0,0,0,0};
+int bkgIndex = 0;
+int bkgOffset = 0;
 
 int testMax = 0;
 
@@ -108,10 +114,17 @@ void setup() {
 void loop() {
   // listen for Bluetooth® Low Energy peripherals to connect:
   BLEDevice central = BLE.central();
-  //NRF_SAADC ->ENABLE = 0; //disable ADC
-  NRF_RADIO ->TXPOWER = -20;
+  
   // Read the most current value of CO sensor
-  coAnalogValue = map(analogRead(ANALOG_INPUT),CAL_VOLT_ZERO,CAL_VOLT_MAX,0,1000);
+  bkgTrend[bkgIndex] = readSensor();
+  bkgIndex++;
+  bkgIndex %= BKG_SIZE;
+  
+  for (int i = 0; i < BKG_SIZE; i++){
+    bkgAverage += bkgTrend[i];
+  }
+  bkgAverage = bkgAverage / BKG_SIZE;
+  bkgOffset = CAL_VOLT_ZERO - bkgAverage;
 
   if (statusReady && STATUS_BIT_START){
     if (millis() > TIMER_WARMUP){
@@ -162,15 +175,11 @@ void loop() {
       }
     }
 
-    // Data acquisiton and processing code
-    for (int i = 0; i < SAMPLE_SIZE; i++){
-      coAnalogValue = fir_avg.processReading(analogRead(ANALOG_INPUT));
-      delay(SAMPLE_DELAY);
-    }
+    coAnalogValue = readSensor();
     
     coConcentration.writeValue(map(coAnalogValue,CAL_VOLT_ZERO,CAL_VOLT_MAX,0,1000));
     coAnalogValue = fir_lp.processReading(coAnalogValue);
-    coMax.writeValue(coAnalogValue);
+    coMax.writeValue(bkgOffset);
         
 
         // Check for data analysis
@@ -205,4 +214,14 @@ void loop() {
     //NRF_POWER->SYSTEMOFF = 1;
   }
     
+}
+
+// Data acquisiton and processing code
+float readSensor(){
+  // Loop over given number of iterations with delay to acquire multiple data points
+  for (int i = 0; i < SAMPLE_SIZE-1; i++){
+    fir_avg.processReading(analogRead(ANALOG_INPUT));
+    delay(SAMPLE_DELAY);
+  }
+  return fir_avg.processReading(analogRead(ANALOG_INPUT));
 }

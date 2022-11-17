@@ -13,7 +13,7 @@
  */
 
 #include <ArduinoBLE.h>
-#include <FIR.h>
+#include "COData.h"
  
 BLEService carbonMonoxide("181A"); // Bluetooth® Low Energy - Environmental Sensing
  
@@ -30,7 +30,9 @@ BLEWordCharacteristic coMax("2AF4", BLERead | BLENotify);
 #define STATUS_BIT_CONNECTED    0b00010000
 #define STATUS_BIT_TEST_NOW     0b00000001
 #define STATUS_BIT_TEST_DONE    0b00000010
-int statusReady = STATUS_BIT_START;
+#define STATUS_BIT_TEST_GOOD    0b00000100
+#define STATUS_BIT_TEST_END     0b00001000
+int statusReady = 0;
 
 // Sensor timing for different operation modes
 // Sensor data must be stable for 60 seconds before enabling test
@@ -39,29 +41,19 @@ int statusReady = STATUS_BIT_START;
 #define TIMER_OFF  30000
 int timerSample = 1;
 int timerStart = 0;
+int timerEnd = 0;
 
-#define ANALOG_INPUT    A0
 #define CAL_VOLT_ZERO   185
 #define CAL_VOLT_MAX    931
-#define SAMPLE_DELAY    10
-#define SAMPLE_SIZE     25
-#define BKG_SIZE        5
 
+// Data class for sensor measurement at different times of operation
+COData COValue;
 float coAnalogValue = 0;
-float coTrend [5] = {0,0,0,0,0};
-float bkgAverage = 0;
-float bkgTrend [BKG_SIZE] = {0,0,0,0,0};
-int bkgIndex = 0;
-int bkgOffset = 0;
+float coBkgPretest = 0;
+float coBkgConnect = 0;
+float coBkgPosttest = 0;
 
 int testMax = 0;
-
-FIR<float, 13> fir_lp;
-float coef_lp[13] = { 660, 470, -1980, -3830, 504, 10027, 15214, 10027, 504, -3830, -1980, 470, 660};
-
-FIR<float, 10> fir_avg;
-// For a moving average we use all ones as coefficients.
-float coef_avg[25] = {1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.};
 
 void setup() {
   
@@ -90,10 +82,123 @@ void setup() {
   // start advertising
   BLE.advertise();
 
-  // Set the coefficients
-  fir_lp.setFilterCoeffs(coef_lp);
-  fir_avg.setFilterCoeffs(coef_avg);
+  modeMin();
+}
+ 
+void loop() {
+  
+  BLEDevice central = BLE.central();      // Check for connection
+  coBkgPretest = COValue.readBkg();       // Read the sensor value
 
+  checkStatus(coBkgPretest);                          // Check device readiness
+
+  if (millis() > TIMER_OFF){
+    //digitalWrite(D10,LOW);
+  }
+
+  // Device is connected
+  while (central.connected()) {
+    statusReady |= STATUS_BIT_CONNECTED;
+    // Check device readiness: must be on for more time than WARMUP
+    if (checkStatus(coBkgConnect)){
+      statusByte.writeValue(statusReady);
+    }
+    
+    // Check for external commands
+    if (commandByte.written()) {
+      // Identify the command: x01 => start test timer
+      if (commandByte.value() & 0b00000001) {   
+        // Clear the test status bits and previous results
+        statusReady |= STATUS_BIT_TEST_NOW;
+        testMax = 0;
+        timerStart = millis();
+        statusByte.writeValue(statusReady);
+        coMax.writeValue(testMax);
+      }
+      else if (commandByte.value() & 0b00000010){
+        // Clear the result and prepare for a new test
+        statusReady &= 0b11110000;
+        testMax = 0;
+        statusByte.writeValue(statusReady);
+        coMax.writeValue(testMax);
+      }
+      else {                              
+        statusReady = statusReady | STATUS_BIT_TEST_NOW;     
+      }
+    }
+
+    // Check for data analysis, 3 states: pre, test, post
+    if (!(statusReady & 0b00000011)){
+      coBkgConnect = COValue.readBkg();
+      coConcentration.writeValue(map(coBkgConnect,CAL_VOLT_ZERO,CAL_VOLT_MAX,0,1000));
+    }
+    else if ((statusReady & 0b00000001) && !(statusReady & 0b00000010)){
+      coAnalogValue = map(COValue.readSensor() + (CAL_VOLT_ZERO - COValue.getBkg()),CAL_VOLT_ZERO,CAL_VOLT_MAX,0,1000);
+      coConcentration.writeValue(coAnalogValue);
+      if (coAnalogValue > testMax){
+        testMax = coAnalogValue;
+        coMax.writeValue(testMax);
+      }
+      if ((millis() - timerStart) > TIMER_TEST){
+        statusReady |= STATUS_BIT_TEST_DONE;
+        statusByte.writeValue(statusReady);
+        timerEnd = millis();
+      }          
+    }
+    else {
+      coBkgPosttest = COValue.readBkg();
+      coConcentration.writeValue(map(coBkgPosttest,CAL_VOLT_ZERO,CAL_VOLT_MAX,0,1000));
+      if (millis() - timerEnd > TIMER_TEST){
+        statusReady |= STATUS_BIT_TEST_END;
+        if (abs(coBkgConnect - coBkgPosttest) < 2){
+          statusReady |= STATUS_BIT_TEST_GOOD;
+        }
+        statusReady &= 0b11111100;
+        statusByte.writeValue(statusReady);
+      }
+    }
+        
+  }
+  if (statusReady & STATUS_BIT_CONNECTED){
+    statusReady &= !STATUS_BIT_CONNECTED;
+    //modeSleep();
+  }
+    
+}
+
+// Verify the current data value, must be on for more time than WARMUP
+int checkStatus(float dataValue){
+  int previousStatus = statusReady;
+  if (millis() > TIMER_WARMUP){           // Check device "ON" time
+      statusReady |= STATUS_BIT_START;
+  }
+  
+  if (abs(dataValue - CAL_VOLT_ZERO) > 2){             // Check magnitude of signal
+    statusReady |= STATUS_BIT_BKG_ZERO;
+  }
+  else {
+    statusReady &= 0b10111111;
+  }
+  if ((dataValue - CAL_VOLT_ZERO) < 0){                  // Check for DC voltage drift
+    statusReady |= STATUS_BIT_BKG_OFFSET;
+  }
+  else {
+    statusReady &= 0b11011111;
+  }
+  if (previousStatus != statusReady){
+    return 1;
+  }
+  else{
+    return 0;
+  }
+}
+
+// Manually disable all parts of the microcontroller
+void modeSleep(){
+  NRF_POWER->SYSTEMOFF = 1;
+}
+
+void modeMin(){
   NRF_UART0 ->TASKS_STOPTX = 1;
   NRF_UART0 ->TASKS_STOPRX = 1;
   NRF_UART0 ->ENABLE = 0;
@@ -109,119 +214,4 @@ void setup() {
   NRF_SPI0 -> ENABLE = 0; //disable SPI
   NRF_SPI1 -> ENABLE = 0; //disable SPI
   NRF_SPI2 -> ENABLE = 0; //disable SPI
-}
- 
-void loop() {
-  // listen for Bluetooth® Low Energy peripherals to connect:
-  BLEDevice central = BLE.central();
-  
-  // Read the most current value of CO sensor
-  bkgTrend[bkgIndex] = readSensor();
-  bkgIndex++;
-  bkgIndex %= BKG_SIZE;
-  
-  for (int i = 0; i < BKG_SIZE; i++){
-    bkgAverage += bkgTrend[i];
-  }
-  bkgAverage = bkgAverage / BKG_SIZE;
-  bkgOffset = CAL_VOLT_ZERO - bkgAverage;
-
-  if (statusReady && STATUS_BIT_START){
-    if (millis() > TIMER_WARMUP){
-      statusReady = statusReady ^ STATUS_BIT_START;
-      //statusByte.writeValue(statusReady);
-    }
-  }
-  else if (statusReady <= 1){
-    if (coAnalogValue > 2){
-      statusReady = 1;
-      
-    }
-    else if (coAnalogValue < 2){
-      statusReady = 0;
-      
-    }
-  }
-
-  if (millis() > TIMER_OFF){
-    //digitalWrite(D10,LOW);
-  }
-
-  // Device is connected
-  while (central.connected()) {
-    statusReady = statusReady | STATUS_BIT_CONNECTED;
-    testMax++;
-    
-    // Check device readiness: must be on for more time than WARMUP
-    if (statusReady && STATUS_BIT_START){
-      if (millis() > TIMER_WARMUP){
-        statusReady = statusReady ^ STATUS_BIT_START;
-        statusByte.writeValue(statusReady);
-      }
-    }
-
-    // Check for external commands
-    if (commandByte.written()) {
-      // Identify the command: x01 => start test timer
-      if (commandByte.value() & 0b00000001) {   
-        // Clear the test status bits and previous results
-        statusReady = statusReady | STATUS_BIT_TEST_NOW;
-        testMax = 0;
-        timerStart = millis();
-        statusByte.writeValue(statusReady);
-        coMax.writeValue(testMax);
-      } else {                              
-        statusReady = statusReady | STATUS_BIT_TEST_NOW;     
-      }
-    }
-
-    coAnalogValue = readSensor();
-    
-    coConcentration.writeValue(map(coAnalogValue,CAL_VOLT_ZERO,CAL_VOLT_MAX,0,1000));
-    coAnalogValue = fir_lp.processReading(coAnalogValue);
-    coMax.writeValue(bkgOffset);
-        
-
-        // Check for data analysis
-        if ((statusReady & 0b00000001) && !(statusReady & 0b00000010)){
-          if (coAnalogValue > testMax){
-            testMax = coAnalogValue;
-            coMax.writeValue(testMax);
-          }
-          if ((millis() - timerStart) > TIMER_TEST){
-            statusReady = statusReady | STATUS_BIT_TEST_DONE;
-            statusByte.writeValue(statusReady);
-          }          
-        }
-        
-  }
-  if (statusReady & STATUS_BIT_CONNECTED){
-    NRF_UART0 ->TASKS_STOPTX = 1;
-    NRF_UART0 ->TASKS_STOPRX = 1;
-    NRF_UART0 ->ENABLE = 0;
-    NRF_UARTE0->ENABLE = 0;  //disable UART
-    NRF_SAADC ->ENABLE = 0; //disable ADC
-    NRF_RADIO ->TXPOWER = -20;
-    NRF_PWM0  ->ENABLE = 0; //disable all pwm instance
-    NRF_PWM1  ->ENABLE = 0;
-    NRF_PWM2  ->ENABLE = 0;
-    NRF_TWIM1 ->ENABLE = 0; //disable TWI Master
-    NRF_TWIS1 ->ENABLE = 0; //disable TWI Slave
-  
-    NRF_SPI0 -> ENABLE = 0; //disable SPI
-    NRF_SPI1 -> ENABLE = 0; //disable SPI
-    NRF_SPI2 -> ENABLE = 0; //disable SPI
-    //NRF_POWER->SYSTEMOFF = 1;
-  }
-    
-}
-
-// Data acquisiton and processing code
-float readSensor(){
-  // Loop over given number of iterations with delay to acquire multiple data points
-  for (int i = 0; i < SAMPLE_SIZE-1; i++){
-    fir_avg.processReading(analogRead(ANALOG_INPUT));
-    delay(SAMPLE_DELAY);
-  }
-  return fir_avg.processReading(analogRead(ANALOG_INPUT));
 }

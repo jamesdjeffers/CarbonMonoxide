@@ -14,19 +14,25 @@
 #define ANALOG_INPUT    A0
 #define SAMPLE_DELAY    10
 #define SAMPLE_SIZE     25
-#define BKG_SIZE        5
+#define BKG_SIZE        8
+#define TEST_SIZE       4
+
+#define CAL_VOLT_ZERO       186
+#define CAL_VOLT_RANGE      435
+#define SENSOR_MAX          1000
 
 class COData
 {
    private:
      float bkgAverage = 0;
-     float bkgTrend [BKG_SIZE] = {0,0,0,0,0};
+     float bkgTrend [BKG_SIZE] = {0,0,0,0,0,0,0,0};
      int bkgIndex = 0;
-     
-     FIR<float, 13> fir_lp;
-     float coef_lp[13] = { 660, 470, -1980, -3830, 504, 10027, 15214, 10027, 504, -3830, -1980, 470, 660};
 
-     FIR<float, 10> fir_avg;
+     float testAverage = 0;
+     float testTrend [TEST_SIZE] = {0,0,0,0};
+     int testIndex = 0;
+
+     FIR<float, 25> fir_avg;
      // For a moving average we use all ones as coefficients.
      float coef_avg[25] = {1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.};
 
@@ -34,8 +40,9 @@ class COData
      COData();
      float readSensor();
      float readBkg();
+     float readTest();
      int getBkg();
-     float filterData(int COAnalogValue);
+     int convert(float current);
 };
 
 #endif

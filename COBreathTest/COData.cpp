@@ -3,7 +3,6 @@
 
 COData::COData(){
   // Set the coefficients
-  fir_lp.setFilterCoeffs(coef_lp);
   fir_avg.setFilterCoeffs(coef_avg);
 }
 
@@ -23,11 +22,6 @@ float COData::readBkg(){
   bkgIndex++;
   bkgIndex %= BKG_SIZE;
 
-  // Read the most current value of CO sensor
-  bkgTrend[bkgIndex] = readSensor();
-  bkgIndex++;
-  bkgIndex %= BKG_SIZE;
-
   bkgAverage = 0;
   for (int i = 0; i < BKG_SIZE; i++){
     bkgAverage += bkgTrend[i];
@@ -37,13 +31,25 @@ float COData::readBkg(){
 }
 
 // Read the most current value of CO sensor
+float COData::readTest(){
+  testTrend[testIndex] = readSensor();
+  testIndex++;
+  testIndex %= TEST_SIZE;
+
+  testAverage = 0;
+  for (int i = 0; i < TEST_SIZE; i++){
+    testAverage += testTrend[i];
+  }
+  testAverage = testAverage / TEST_SIZE;
+  return testAverage;
+}
+
+// Read the most current value of CO sensor
 int COData::getBkg(){
   
   return bkgAverage;
 }
 
-// Read the most current value of CO sensor
-float COData::filterData(int coAnalogValue){
-  
-  return fir_lp.processReading(coAnalogValue);;
+int COData::convert(float current){
+  return (current-CAL_VOLT_ZERO)*1000/CAL_VOLT_RANGE;
 }

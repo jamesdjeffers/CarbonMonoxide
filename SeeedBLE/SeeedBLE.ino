@@ -17,147 +17,205 @@
 BLEService carbonMonoxide("181A"); // Bluetooth® Low Energy - Environmental Sensing
  
 // Bluetooth® Low Energy LED Switch Characteristic - custom 128-bit UUID, read and writable by central
-// BLEByteCharacteristic switchCharacteristic("2BD1", BLERead | BLEWrite);
-BLEByteCharacteristic coAnalog("19b10001-e8f4-537e-4f6c-d104768a1214", BLERead | BLENotify);
-// BLEByteCharacteristic coMonitor("19b10001-e8f5-537e-4f6c-d104768a1214", BLERead | BLENotify);
+BLEWordCharacteristic coConcentration("2BD0", BLERead | BLENotify);
+BLEByteCharacteristic statusByte("2BBB", BLERead | BLENotify);
+BLEByteCharacteristic commandByte("2A9F", BLEWrite);
+BLEWordCharacteristic coMax("2AF4", BLERead | BLENotify);
  
-//const int ledRed = LED_BUILTIN; // pin to use for the LED
-//const int ledBlue = LEDG;
-//const int ledGreen = LEDB;
+int bytes;
+char serialBuffer [9] = {0xFF,0x01,0x78,0x03,0x00,0x00,0x00,0x00,0x84};
 
-//int bytes;
-//char serialBuffer [9] = {0xFF,0x01,0x78,0x03,0x00,0x00,0x00,0x00,0x84};
+// Status flags for system states and performance
+#define STATUS_BIT_START        0b10000000
+#define STATUS_BIT_BKG_ZERO     0b01000000
+#define STATUS_BIT_BKG_OFFSET   0b00100000
+#define STATUS_BIT_CONNECTED    0b00010000
+#define STATUS_BIT_TEST_NOW     0b00000001
+#define STATUS_BIT_TEST_DONE    0b00000010
+#define STATUS_BIT_TEST_GOOD    0b00000100
+#define STATUS_BIT_TEST_END     0b00001000
+int statusReady = 0;
 
-// Sensor must be on for 30 seconds
-#define TIMER_WARMUP  30000
-int statusReady = -1;
-
-int timerSample = 1;
-int timerBreath = 15;
+// Sensor timing for different operation modes
+// Sensor data must be stable for 60 seconds before enabling test
+#define TIMER_WARMUP  60000
+#define TIMER_TEST 15000
 #define TIMER_OFF  30000
-int timerReset = 0;
+int timerSample = 1;
+int timerStart = 0;
+int timerEnd = 0;
 
-int coAnalogValue = 0;
+// Data class for sensor measurement at different times of operation
+
+float coValue = 0;
+float coBkgPretest = 0;
+float coBkgConnect = 0;
+float coBkgPosttest = 0;
+
+int testMax = 0;
 float coTrend [5] = {0,0,0,0,0};
 
  
 void setup() {
-  //Serial.begin(9600);
 
-  //Serial1.begin(9600);
-  //Serial1.setTimeout(1000);
-  //Serial1.write(serialBuffer,9);
- 
-  // set LED pin to output mode
-  //pinMode(ledRed, OUTPUT);
-  //pinMode(ledBlue, OUTPUT);
-  //pinMode(ledGreen, OUTPUT);
-  pinMode(A0, INPUT);
-  //pinMode(D10, OUTPUT);
-  //digitalWrite(D10, LOW); // Enable red LED for error
+  Serial1.begin(9600);
+  Serial1.setTimeout(2000);
  
   // begin initialization
-  if (!BLE.begin()) {
-//    digitalWrite(ledRed, HIGH); // Enable red LED for error
-    while (1);
-  }
+  BLE.begin();
  
   // set advertised local name and service UUID:
   BLE.setLocalName("Univ. Oklahoma NPL CO Monitor");
   BLE.setAdvertisedService(carbonMonoxide);
  
   // add all the characteristic to the service
-  //carbonMonoxide.addCharacteristic(switchCharacteristic);
-  carbonMonoxide.addCharacteristic(coAnalog);
-  //carbonMonoxide.addCharacteristic(coMonitor);
+  carbonMonoxide.addCharacteristic(coConcentration);
+  carbonMonoxide.addCharacteristic(statusByte);
+  carbonMonoxide.addCharacteristic(commandByte);
+  carbonMonoxide.addCharacteristic(coMax);
  
   // add service
   BLE.addService(carbonMonoxide);
- 
-  // set the initial value for the characeristic:
-  //switchCharacteristic.writeValue(0);
- 
-  // start advertising
-  BLE.advertise();  
-  //digitalWrite(ledGreen, HIGH); // Enable red LED for error
-  //digitalWrite(ledRed, LOW); // Enable red LED for error
 
+  // set the initial value for the characeristic:
+  statusByte.writeValue(statusReady);
+  coConcentration.writeValue(0);
+  coMax.writeValue(0);
+
+  // start advertising
+  BLE.advertise();
   
-  //digitalWrite(D10, HIGH); // Enable red LED for error
-  //Serial.println("BLE LED Peripheral");
+  modeMin();
 }
  
 void loop() {
   // listen for Bluetooth® Low Energy peripherals to connect:
   BLEDevice central = BLE.central();
   // Read the most current value of CO sensor
-  coAnalogValue = map(analogRead(A0),185,931,0,1000);
-
-  if (statusReady < 0){
-    if (millis() > TIMER_WARMUP){
-      statusReady = 0;
-      //digitalWrite(ledGreen, HIGH); // Enable red LED for error
-      //digitalWrite(ledRed, HIGH); // Enable red LED for error
-    }
+  bytes = Serial1.readBytes(serialBuffer,9);
+  if (bytes > 0){
+    coBkgPretest = (serialBuffer[2]*256+serialBuffer[3]);
+    checkStatus(coBkgPretest);
   }
-  else if (statusReady <= 1){
-    if (coAnalogValue > 2){
-      statusReady = 1;
-      //digitalWrite(ledBlue, HIGH); // Enable red LED for error
-      //digitalWrite(ledGreen, LOW); // Enable red LED for error
-      //digitalWrite(ledRed, HIGH); // Enable red LED for error
-    }
-    else if (coAnalogValue < 2){
-      statusReady = 0;
-      //digitalWrite(ledBlue, LOW); // Enable red LED for error
-      //digitalWrite(ledGreen, HIGH); // Enable red LED for error
-      //digitalWrite(ledRed, HIGH); // Enable red LED for error
-    }
+  else{
+    coBkgPretest = 0xFF;
+    statusReady |= 0xFF;
   }
-
-  if (millis() > TIMER_OFF){
-    //digitalWrite(D10,LOW);
-  }
-
+  delay(800);
+  
   // Device is connected
   while (central.connected()) {
-    //digitalWrite(D10, HIGH); // Enable red LED for error
-        /*if (switchCharacteristic.written()) {
-          if (switchCharacteristic.value()) {   
-            //Serial.println("LED on");
-            digitalWrite(ledRed, LOW); // changed from HIGH to LOW       
-          } else {                              
-            //Serial.println(F("LED off"));
-            digitalWrite(ledRed, HIGH); // changed from LOW to HIGH     
-          }
-        }*/
-        coAnalogValue = analogRead(A0);
-        coTrend[0] = map(coAnalogValue,185,931,0,1000);
-        delay(100);
-        coAnalogValue = analogRead(A0);
-        coTrend[1] = map(coAnalogValue,185,931,0,1000);
-        delay(100);
-        coAnalogValue = analogRead(A0);
-        coTrend[2] = map(coAnalogValue,185,931,0,1000);
-        delay(100);
-        coAnalogValue = analogRead(A0);
-        coTrend[3] = map(coAnalogValue,185,931,0,1000);
-        delay(100);
-        coAnalogValue = analogRead(A0);
-        coTrend[4] = map(coAnalogValue,185,931,0,1000);
-        delay(100);
-        coAnalogValue = (coTrend[0] + coTrend[1] + coTrend[2] + coTrend[3] + coTrend[4])/5;
-        //coAnalog.writeValue(map(coAnalogValue,185,931,0,1000));
-        coAnalog.writeValue(coAnalogValue);
-        /*if (bytes > 0){
-          coMonitor.writeValue(serialBuffer[2]*256+serialBuffer[3]);
-          Serial1.write(int(serialBuffer[3]));
-        }
-        else{
-          coMonitor.writeValue(0xFF);
-        }*/
+    statusReady |= STATUS_BIT_CONNECTED;
+    bytes = Serial1.readBytes(serialBuffer,9);
+    if (bytes > 0){
+      coValue = (serialBuffer[2]*256+serialBuffer[3]);
+    }
+    else{
+      coValue = -1;
+      statusReady |= 0xFF;
+    }
+    // Check device readiness: must be on for more time than WARMUP
+    if (checkStatus(coValue)){
+      statusByte.writeValue(statusReady);
+    }
+
+    // Check for external commands
+    if (commandByte.written()) {
+      // Identify the command: x01 => start test timer
+      if (commandByte.value() & 0b00000001) {   
+        // Clear the test status bits and previous results
+        statusReady |= STATUS_BIT_TEST_NOW;
+        testMax = 0;
+        timerStart = millis();
+        statusByte.writeValue(statusReady);
+        coMax.writeValue(testMax);
       }
-  //digitalWrite(D10, LOW); // Enable red LED for error
-    // when the central disconnects, print it out:
+      else if (commandByte.value() & 0b00000010){
+        // Clear the result and prepare for a new test
+        statusReady &= 0b11110000;
+        testMax = 0;
+        statusByte.writeValue(statusReady);
+        coMax.writeValue(testMax);
+      }
+      else {                              
+        statusReady = statusReady | STATUS_BIT_TEST_NOW;     
+      }
+    }
+
+    // Check for data analysis, 3 states: pre, test, post
+    if (!(statusReady & 0b00000011)){
+      coBkgConnect = coValue;
+      coConcentration.writeValue(coValue);
+    }
+    else if ((statusReady & 0b00000001) && !(statusReady & 0b00000010)){
+      coConcentration.writeValue(coValue);
+      if (coValue > testMax){
+        testMax = coValue;
+        coMax.writeValue(testMax);
+      }
+      if ((millis() - timerStart) > TIMER_TEST){
+        statusReady |= STATUS_BIT_TEST_DONE;
+        statusByte.writeValue(statusReady);
+        timerEnd = millis();
+      }          
+    }
+    else {
+      coBkgPosttest = coValue;
+      coConcentration.writeValue(coBkgPosttest);
+      if (millis() - timerEnd > TIMER_TEST){
+        statusReady |= STATUS_BIT_TEST_END;
+        if (abs(coBkgConnect - coBkgPosttest) < 2){
+          statusReady |= STATUS_BIT_TEST_GOOD;
+        }
+        statusReady &= 0b11111100;
+        statusByte.writeValue(statusReady);
+      }
+    }
     
+  }
+    
+}
+
+// Verify the current data value, must be on for more time than WARMUP
+int checkStatus(float dataValue){
+  int previousStatus = statusReady;
+  if (millis() > TIMER_WARMUP){           // Check device "ON" time
+      statusReady |= STATUS_BIT_START;
+  }
+  
+  if (dataValue > 2){             // Check magnitude of signal
+    statusReady |= STATUS_BIT_BKG_ZERO;
+  }
+  else {
+    statusReady &= 0b10111111;
+  }
+  if (dataValue < 0){                  // Check for DC voltage drift
+    statusReady |= STATUS_BIT_BKG_OFFSET;
+  }
+  else {
+    statusReady &= 0b11011111;
+  }
+  if (previousStatus != statusReady){
+    return 1;
+  }
+  else{
+    return 0;
+  }
+}
+
+void modeMin(){
+  NRF_UART0 ->TASKS_STOPTX = 1;
+  NRF_UART0 ->TASKS_STOPRX = 1;
+  NRF_UART0 ->ENABLE = 0;
+  NRF_SAADC ->ENABLE = 0; //disable ADC
+  NRF_RADIO ->TXPOWER = -20;
+  NRF_PWM0  ->ENABLE = 0; //disable all pwm instance
+  NRF_PWM1  ->ENABLE = 0;
+  NRF_PWM2  ->ENABLE = 0;
+  NRF_TWIM1 ->ENABLE = 0; //disable TWI Master
+  NRF_TWIS1 ->ENABLE = 0; //disable TWI Slave
+
+  NRF_SPI0 -> ENABLE = 0; //disable SPI
+  NRF_SPI1 -> ENABLE = 0; //disable SPI
+  NRF_SPI2 -> ENABLE = 0; //disable SPI
 }

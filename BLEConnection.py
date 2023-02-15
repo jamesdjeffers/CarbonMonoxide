@@ -1,4 +1,4 @@
-# Winsen Data Trend Acquisition
+# Bluetooth Data Trend Acquisition
 #
 # This program uses the "Bleak" Bluetooth Low Enengry Python library
 # with asychronous data transfer to aquires data from an
@@ -46,7 +46,7 @@ async def findBLE(self):
     startTime = time.time()
     iteration = 0
     fileOutput = fileName + fileExtension
-    async with BleakClient(address04) as client:
+    async with BleakClient(address00) as client:
         #async with BleakClient(address01) as client2:
             while(True):
                 co_concentration = await client.read_gatt_char(CO_CONCENTRATION_UUID)
@@ -60,7 +60,7 @@ async def findBLE(self):
                 #dataArray[1,iteration] = data_num
                 co_concentration = await client.read_gatt_char(CO_TEST_UUID)
                 data_num = int.from_bytes(co_concentration, byteorder='little', signed=True)
-                print(data_num)
+                #print(data_num)
                 dataArray[1,iteration] = data_num
         
                 with open(fileOutput, 'w', newline='') as f:

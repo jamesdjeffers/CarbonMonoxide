@@ -43,8 +43,7 @@ int timerSample = 1;
 int timerStart = 0;
 int timerEnd = 0;
 
-#define CAL_VOLT_ZERO   185
-#define CAL_VOLT_MAX    931
+
 
 // Data class for sensor measurement at different times of operation
 COData COValue;
@@ -129,11 +128,11 @@ void loop() {
 
     // Check for data analysis, 3 states: pre, test, post
     if (!(statusReady & 0b00000011)){
-      coBkgConnect = COValue.readBkg();
-      coConcentration.writeValue(map(coBkgConnect,CAL_VOLT_ZERO,CAL_VOLT_MAX,0,1000));
+      coBkgConnect = COValue.convert(COValue.readBkg());
+      coConcentration.writeValue(coBkgConnect);
     }
     else if ((statusReady & 0b00000001) && !(statusReady & 0b00000010)){
-      coAnalogValue = map(COValue.readSensor() + (CAL_VOLT_ZERO - COValue.getBkg()),CAL_VOLT_ZERO,CAL_VOLT_MAX,0,1000);
+      coAnalogValue = COValue.convert(COValue.readTest());
       coConcentration.writeValue(coAnalogValue);
       if (coAnalogValue > testMax){
         testMax = coAnalogValue;
@@ -147,7 +146,7 @@ void loop() {
     }
     else {
       coBkgPosttest = COValue.readBkg();
-      coConcentration.writeValue(map(coBkgPosttest,CAL_VOLT_ZERO,CAL_VOLT_MAX,0,1000));
+      coConcentration.writeValue(COValue.convert(coBkgPosttest));
       if (millis() - timerEnd > TIMER_TEST){
         statusReady |= STATUS_BIT_TEST_END;
         if (abs(coBkgConnect - coBkgPosttest) < 2){
